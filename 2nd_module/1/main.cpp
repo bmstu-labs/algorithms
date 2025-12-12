@@ -2,8 +2,19 @@
 #include <iostream>
 #include <vector>
 #include <unordered_map>
-#include <cstdint>
 
+// Задача 1.1 Реализуйте структуру данных типа “множество строк” на основе динамической хеш-таблицы с открытой адресацией.
+// Хранимые строки непустые и состоят из строчных латинских букв. 
+// Хеш-функция строки должна быть реализована с помощью вычисления значения многочлена методом Горнера. 
+// Начальный размер таблицы должен быть равным 8-ми.
+// Перехеширование выполняйте при добавлении элементов в случае, когда коэффициент заполнения таблицы достигает 3/4. 
+// Структура данных должна поддерживать операции добавления строки в множество,
+// удаления строки из множества и проверки принадлежности данной строки множеству. 
+
+// Для разрешения коллизий используйте квадратичное пробирование. i-ая проба 
+// g(k, i)=g(k, i-1) + i (mod m). m - степень двойки. 
+
+ 
 template<typename TYPE>
 struct SetNode {
     TYPE key;
@@ -11,109 +22,106 @@ struct SetNode {
     bool deleted = false;
 };
 
-class HornerHashing {
-public:
-    std::uint64_t operator()(const std::string &key) const {
-        std::uint64_t hash = 0;
-        for (const char &ch : key) {
-            hash = hash * 31 + (std::uint8_t) ch;
-        }
-
-        return hash;
-    }
-};
-
 template<typename TYPE, typename HASHER>
 class Set {
 private:
     HASHER _hash;
-    SetNode<TYPE> *_setTable;
-    std::size_t _setFilled;
-    std::size_t _setCapacity;
+    SetNode<TYPE> *_table;
+    std::size_t _capacity;
+    std::size_t _filled;
 
 private:
-    void _insertKey(
-        const TYPE &key,
-        std::size_t capacity,
-        SetNode<TYPE> *array
-    ) {
-        std::uint64_t hash = _createHash(key, capacity);
-        for (std::size_t i = 0; i < capacity; i++) {
-            std::uint64_t idx = (hash + i * i) & (capacity - 1);
-
-            if (array[idx].used == false) {
-                array[idx].key = key;
-                array[idx].used = true;
-                array[idx].deleted = false;
-                break;
-            }
-        }
-    }
-
-    std::uint64_t _createHash(
-        const TYPE &key,
-        std::size_t capacity
-    ) const noexcept {
-        return _hash(key) & (capacity - 1);
+    std::size_t _probe(std::size_t hash, std::size_t i, std::size_t cap) const {
+        return (hash + (i * (i + 1)) / 2) & (cap - 1);
     }
 
     void _tryResizeTable() {
-        if (4 * _setFilled < 3 * _setCapacity) {
+        if ((_filled + 1) * 4 < _capacity * 3) {
             return;
         }
 
-        std::size_t newSetCapacity = _setCapacity << 1;
+        std::size_t newCap = _capacity << 1;
+        SetNode<TYPE> *newTable = new SetNode<TYPE>[newCap];
 
-        SetNode<TYPE> *newSetTable = new SetNode<TYPE>[newSetCapacity];
-        for (std::size_t i = 0; i < _setCapacity; i++) {
-            if (_setTable[i].used == true) {
-                _insertKey(_setTable[i].key, newSetCapacity, newSetTable);
+        for (std::size_t i = 0; i < _capacity; i++) {
+            if (_table[i].used && !_table[i].deleted) {
+                _insertKey(_table[i].key, newTable, newCap);
             }
         }
 
-        delete[] _setTable;
+        delete[] _table;
+        _table = newTable;
+        _capacity = newCap;
+    }
 
-        _setTable = newSetTable;
-        _setCapacity = newSetCapacity;
+    void _insertKey(const TYPE& key, SetNode<TYPE> *table, std::size_t cap) {
+        std::size_t hash = _hash(key);
+        std::size_t firstDeleted = -1;
+
+        for (std::size_t i = 0; i < cap; i++) {
+            std::size_t idx = _probe(hash, i, cap);
+            auto& cell = table[idx];
+
+            if (!cell.used) {
+                std::size_t writeIdx = (firstDeleted != -1) ? firstDeleted : idx;
+                table[writeIdx].key = key;
+                table[writeIdx].used = true;
+                table[writeIdx].deleted = false;
+                ++_filled;
+                return;
+            }
+
+            if (cell.deleted) {
+                if (firstDeleted == -1) {
+                    firstDeleted = (int)idx;
+                }
+            }
+            else if (cell.key == key) {
+                return;
+            }
+        }
+
+        if (firstDeleted != -1) {
+            table[firstDeleted].key = key;
+            table[firstDeleted].used = true;
+            table[firstDeleted].deleted = false;
+            _filled++;
+        }
     }
 
 public:
-    Set() : _setFilled(0), _setCapacity(8), _hash() {
-        _setTable = new SetNode<TYPE>[_setCapacity]();
+    Set() : _capacity(8), _filled(0), _hash() {
+        _table = new SetNode<TYPE>[_capacity];
     }
 
     ~Set() {
-        _setFilled = 0;
-        _setCapacity = 0;
-        delete[] _setTable;
+        delete[] _table;
     }
 
 public:
-    bool add(const TYPE &key) {
+    bool add(const TYPE& key) {
         if (exist(key)) {
             return false;
         }
 
         _tryResizeTable();
-        
-        _insertKey(key, _setCapacity, _setTable);
-        _setFilled++;
-        
+        _insertKey(key, _table, _capacity);
         return true;
     }
 
-    bool remove(const TYPE &key) {
-        std::uint64_t hash = _createHash(key, _setCapacity);
-        for (std::size_t i = 0; i < _setCapacity; i++) {
-            std::uint64_t idx = (hash + i * i) & (_setCapacity - 1);
+    bool remove(const TYPE& key) {
+        std::size_t hash = _hash(key);
 
-            if (_setTable[idx].used == false) {
+        for (std::size_t i = 0; i < _capacity; i++) {
+            std::size_t idx = _probe(hash, i, _capacity);
+            auto& cell = _table[idx];
+
+            if (!cell.used)
                 return false;
-            }
 
-            if (_setTable[idx].key == key) {
-                _setTable[idx].deleted = true;
-                _setFilled--;
+            if (!cell.deleted && cell.key == key) {
+                cell.deleted = true;
+                --_filled;
                 return true;
             }
         }
@@ -121,17 +129,18 @@ public:
         return false;
     }
 
-    bool exist(const TYPE &key) const {
-        std::uint64_t hash = _createHash(key, _setCapacity);
-        
-        for (std::size_t i = 0; i < _setCapacity; i++) {
-            std::uint64_t idx = (hash + i * i) & (_setCapacity - 1);
-            
-            if (_setTable[idx].used == false) {
+    bool exist(const TYPE& key) const {
+        std::size_t hash = _hash(key);
+
+        for (std::size_t i = 0; i < _capacity; i++) {
+            std::size_t idx = _probe(hash, i, _capacity);
+            const auto& cell = _table[idx];
+
+            if (!cell.used) {
                 return false;
             }
 
-            if (_setTable[idx].key == key && _setTable[idx].deleted == false) {
+            if (!cell.deleted && cell.key == key) {
                 return true;
             }
         }
@@ -139,6 +148,23 @@ public:
         return false;
     }
 };
+ 
+struct HornerHashing { 
+private: 
+    std::size_t _p; 
+
+public:
+    HornerHashing(std::size_t p = 31) : _p(p) {} 
+
+    std::size_t operator()(const std::string& key) const { 
+        std::size_t hash = 0; 
+        for (const char &c : key) { 
+            hash = hash * _p + (c - 'a' + 1); 
+        }
+
+        return hash; 
+    } 
+}; 
 
 int main() {
     std::unordered_map<char, void (*)(
